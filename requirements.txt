@@ -1,0 +1,6 @@
+coffea>=0.7.0
+uproot>=5.0.0
+awkward>=2.0.0
+hist>=2.0.0
+numpy
+root
