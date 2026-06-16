@@ -64,7 +64,7 @@ Output: `hists/combined/`, `hists/comparison/`, `hists/cutflow/` — `.png` file
 
 ## Output format
 
-The pickled accumulator is a dict with keys:
+A pickled accumulator `{dataset}.pkl` is created as a dict with keys:
 
 | Key        | Contents |
 |------------|----------|
@@ -74,3 +74,24 @@ The pickled accumulator is a dict with keys:
 | `onia_mass` | `column_accumulator` of Onia (μμ) candidate masses |
 | `dataset`  | Dataset name |
 | `is_mc`    | `True` for MC, `False` for data |
+
+And a ROOT file `{dataset}.root` is also created with the following structure:
+
+```
+events/                        # TTree with selected event values
+├── x_mass                     # X (μμγ) candidate mass [GeV]
+└── onia_mass                  # Onia (μμ) candidate mass [GeV]
+
+metadata/                      # TTree with one entry (file-level metadata)
+├── is_mc                      # 1 for MC, 0 for data
+└── dataset                    # Dataset name (string)
+
+muon_lead/                     # Leading muon histograms
+muon_trail/                    # Trailing muon histograms
+photon/                        # Photon histograms
+onia/                          # Onia histograms (pₜ, η, φ, mass)
+x/                             # X candidate histograms (pₜ, η, φ, mass, n)
+└── {var}/{cat}                # Each variable × selection category
+```
+
+Selection categories: `all`, `trigger`, `good_muons`, `good_photon`, `upsilon_mass`, `x_mass`.
