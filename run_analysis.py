@@ -1,4 +1,4 @@
-"""run_analysis.py: run OniaAnalysisProcessor over ROOT files.
+"""run_analysis.py: run McDataCompProcessor over ROOT files.
 
 Usage
 -----
@@ -8,7 +8,7 @@ Usage
 
 Output
 -----
-    output/dataset.pkl   : pickled accumulator (histograms + cutflow)
+    output/mc_data_comp/dataset.pkl   : pickled accumulator (histograms + cutflow)
 """
 
 from pprint import pprint
@@ -18,7 +18,7 @@ import os
 from coffea.processor import IterativeExecutor, FuturesExecutor, Runner
 from coffea.util import save
 from schema import OniaNanoSchema
-from processor import OniaAnalysisProcessor
+from processor import McDataCompProcessor
 from utils import get_files
 import uproot
 
@@ -30,7 +30,7 @@ OniaNanoSchema.warn_missing_crossrefs = False
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Run OniaAnalysisProcessor over NanoAOD-like ROOT files."
+        description="Run McDataCompProcessor over NanoAOD-like ROOT files."
     )
     parser.add_argument(
         "paths",
@@ -115,7 +115,7 @@ def main():
 
     result, metrics = runner(
         fileset=fileset,
-        processor_instance=OniaAnalysisProcessor(),
+        processor_instance=McDataCompProcessor(),
     )
 
     print("\n--- Metrics ---")
@@ -148,10 +148,11 @@ def main():
     # Saving files
     # -----------------------------------------------------------------
 
-    if not os.path.exists("output"):
-        os.makedirs("output")
+    out_dir = "output/mc_data_comp"
+    if not os.path.exists(out_dir):
+        os.makedirs(out_dir)
     result = {**result, "is_mc": args.is_mc, "dataset": args.dataset}
-    save(result, f"output/{args.dataset}.pkl")
+    save(result, f"{out_dir}/{args.dataset}.pkl")
 
     from coffea.processor import column_accumulator
 
@@ -164,7 +165,7 @@ def main():
 
     events = ak.zip(events)
 
-    with uproot.recreate(f"output/{args.dataset}.root") as f:
+    with uproot.recreate(f"{out_dir}/{args.dataset}.root") as f:
         f["events"] = events
         f["metadata"] = ak.Array([{"is_mc": args.is_mc, "dataset": args.dataset}])
         for grp in result["hists"]:
@@ -173,7 +174,7 @@ def main():
                     path = f"{grp}/{var}/{cat}"
                     f[path] = result["hists"][grp][var][:, cat]
 
-    print(f"\nOutput saved to output/{args.dataset}.pkl and output/{args.dataset}.root")
+    print(f"\nOutput saved to {out_dir}/{args.dataset}.pkl and {out_dir}/{args.dataset}.root")
 
 
 if __name__ == "__main__":

@@ -21,8 +21,7 @@ env/
 *.swo
 
 # Generated analysis output
-output/*.pkl
-output/*.root
+output/*
 hists/
 
 # OS files

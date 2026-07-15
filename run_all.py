@@ -59,7 +59,7 @@ if __name__ == "__main__":
                 d["path"],
                 "--parallel",
                 "--workers",
-                "10",
+                "12",
                 "--dataset",
                 d["name"],
             ],

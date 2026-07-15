@@ -1,8 +1,11 @@
-"""OniaAnalysisProcessor: coffea processor for H/Z -> mu+ mu- gamma onia analysis.
+"""McDataCompProcessor: coffea processor for MC vs data comparison plots.
+
+Produces histograms, cutflow, and selected event values (x_mass, onia_mass)
+for stacked plot comparisons between MC samples and data.
 
 Output
 ------
-    Accumulator containing histograms and cutflow counters.
+    Accumulator containing histograms, cutflow counters, and column accumulators.
 """
 
 from coffea.processor import ProcessorABC, defaultdict_accumulator, column_accumulator
@@ -26,7 +29,7 @@ def fill_hists(x, hists, cat):
             fill_kin_hists(x, hists[h], cat=cat)
 
 
-class OniaAnalysisProcessor(ProcessorABC):
+class McDataCompProcessor(ProcessorABC):
 
     def __init__(self):
         """Initialize the processor."""
