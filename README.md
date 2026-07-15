@@ -8,10 +8,12 @@ using NanoAOD-like ROOT data processed with the [coffea](https://coffea-hep.read
 ```
 ├── run_analysis.py              # McDataCompProcessor: MC vs data comparison
 ├── run_skim.py                  # SkimProcessor: flat ntuple creation
-├── run_all.py                   # Batch runner (compare + skim)
+├── run_onia_skim.py             # OniaSkimProcessor: upsilon mass fitting ntuples
+├── run_all.py                   # Batch runner (compare + skim + onia_skim)
 ├── processor/
 │   ├── McDataCompProcessor.py    # Histograms, cutflow, event selection
 │   ├── SkimProcessor.py          # Flat ntuple of selected events
+│   ├── OniaSkimProcessor.py      # Upsilon-only flat ntuples (all candidates)
 │   └── TestProcessor.py          # Test/legacy processor
 ├── schema/
 │   └── OniaNanoSchema.py         # Custom NanoAOD schema (collections, cross-refs, mixins)
@@ -124,6 +126,24 @@ Creates flat ntuples of selected events.
 `cand_meson_*`, `muon1_*`, `muon2_*`, `gamma_*` — all prefixed with
 `presel_` or `fullsel_` depending on the stage.
 
+### `OniaSkimProcessor` ([`processor/OniaSkimProcessor.py`](processor/OniaSkimProcessor.py))
+
+Data-only processor for upsilon mass fitting. Keeps **all** onia candidates
+per event (no best-candidate picking) for maximum statistics.
+
+**Selection chain:**
+1. Trigger: `HLT_Mu17_Photon30_IsoCaloId`
+2. Good muons: `mediumPromptId` + `pfRelIso03_all < 0.15` on both muons
+3. Onia mass window: 8 < m<sub>μμ</sub> < 12 GeV
+
+**Output columns** (flat, one row per onia candidate):
+
+| Column | Source |
+|--------|--------|
+| `onia_mass`, `onia_pt`, `onia_eta`, `onia_phi`, `onia_rap` | Onia kinematics |
+| `muon1_pt`, `muon1_eta`, `muon1_phi` | Leading muon (from `onia.muon1Idx`) |
+| `muon2_pt`, `muon2_eta`, `muon2_phi` | Subleading muon (from `onia.muon2Idx`) |
+
 ### `TestProcessor` ([`processor/TestProcessor.py`](processor/TestProcessor.py))
 
 Legacy test processor with kOnia/kX collections. Not used in production.
@@ -207,6 +227,27 @@ Each output ROOT file has two TTrees:
 
 The per-event `weight` column is `σ×BR × L / N_raw` for MC, `1` for data.
 
+### `run_onia_skim.py` — Upsilon mass fitting ntuples (data only)
+
+```bash
+python run_onia_skim.py /path/to/files --dataset MuonEG_Run2024
+python run_onia_skim.py /path/to/files --dataset MuonEG_Run2024 --parallel -w 8
+```
+
+**Options:**
+| Flag | Default | Description |
+|------|---------|-------------|
+| `paths` (positional) | required | Input ROOT files or directories |
+| `--dataset` / `-d` | required | Dataset name |
+| `--parallel` / `-p` | `False` | Use `FuturesExecutor` |
+| `--workers` / `-w` | `4` | Number of parallel workers |
+| `--chunksize` | `100000` | Events per chunk |
+| `--maxchunks` | `None` | Max chunks to process (all) |
+| `--treename` | `Events` | TTree name |
+
+**Output:** `output/onia_skim/{dataset}.root` — single `events/` TTree with
+onia and muon columns, no metadata.
+
 ### `run_all.py` — Batch processing
 
 ```bash
@@ -216,9 +257,12 @@ python run_all.py compare --data-path /custom --mc-path /custom
 
 python run_all.py skim                       # all datasets, skim mode
 python run_all.py skim --workers 16
+
+python run_all.py onia-skim                  # upsilon mass fitting ntuples
+python run_all.py onia-skim --workers 16
 ```
 
-**Options (shared by both commands):**
+**Options (shared by `compare` and `skim`):**
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--data-path` | `~/cernbox/rare_decays/MuonEG` | Data directory |
@@ -233,6 +277,17 @@ same behavior as the original subprocess-based runner.
 - **Data:** all `MuonEG_Run2024*` leaf directories combined into a single
   ntuple named `MuonEG_Run2024` (one output pair for the full year).
 - **MC:** one `_run_skim()` call per MC sample (grouped by dataset name).
+
+**`onia-skim` mode:** data only — automatically detects the data-taking year
+from folder names and groups files by year (e.g. all `Run2024*` folders →
+`MuonEG_Run2024`). When future Run 3 years are added, they will automatically
+produce separate outputs (`MuonEG_Run2025`, etc.). No MC processing.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--data-path` | `~/cernbox/rare_decays/MuonEG` | Data directory (MC not used) |
+| `--workers` / `-w` | `12` | Workers per executor |
+| `--parallel` / `--serial` | `parallel` | Use parallel executor |
 
 ### `utils/figure.py` — Plotting
 
@@ -297,6 +352,26 @@ Two files per dataset: `{dataset}_presel.root` and `{dataset}_fullsel.root`.
 | `gamma_*` | `pt`, `eta`, `phi` |
 
 **`metadata/`:** `dataset`, `is_mc`, `n_raw`, `n_sel`, `weight` (single entry).
+
+### `run_onia_skim.py` — ROOT flat ntuple
+
+Single file: `output/onia_skim/{dataset}.root`
+
+**`events/` TTree** (one row per onia candidate, no metadata TTree):
+
+| Column | Description |
+|--------|-------------|
+| `onia_mass` | Dimuon invariant mass [GeV] |
+| `onia_pt` | Dimuon transverse momentum [GeV] |
+| `onia_eta` | Dimuon pseudorapidity |
+| `onia_phi` | Dimuon azimuthal angle |
+| `onia_rap` | Dimuon rapidity |
+| `muon1_pt` | Leading muon pT [GeV] |
+| `muon1_eta` | Leading muon η |
+| `muon1_phi` | Leading muon φ |
+| `muon2_pt` | Subleading muon pT [GeV] |
+| `muon2_eta` | Subleading muon η |
+| `muon2_phi` | Subleading muon φ |
 
 ### Plot output
 

@@ -1,4 +1,5 @@
 import os
+import re
 import getpass
 from collections import defaultdict
 
@@ -53,6 +54,16 @@ def collect_mc_by_name(folders):
         name = extract_name(f, is_mc=True)
         groups[name].append(f)
     return groups
+
+
+def extract_year(folder_path):
+    """Extract data-taking year from a folder path (e.g. 'MuonEG_Run2024G-...' -> '2024')."""
+    parts = folder_path.split("/")
+    for part in parts:
+        m = re.search(r"Run(\d{4})", part)
+        if m:
+            return m.group(1)
+    return "Unknown"
 
 
 @app.command()
@@ -141,6 +152,41 @@ def skim(
             is_mc=True,
         )
         _save_skim_output(result, metrics, name, is_mc=True)
+
+
+@app.command()
+def onia_skim(
+    data_path: str = typer.Option(DEFAULT_DATA_PATH, "--data-path", help="Data directory"),
+    workers: int = typer.Option(12, "--workers", "-w", help="Workers per executor"),
+    parallel: bool = typer.Option(True, "--parallel/--serial", help="Use parallel executor"),
+):
+    from run_onia_skim import _run_onia_skim, _save_onia_skim_output
+
+    data_folders = find_folder(data_path)
+
+    by_year = defaultdict(list)
+    for folder in data_folders:
+        year = extract_year(folder)
+        by_year[year].append(folder)
+
+    for year in sorted(by_year):
+        folders = by_year[year]
+        dataset = f"MuonEG_Run{year}"
+        all_files = []
+        for f in folders:
+            all_files.extend(get_files([f], exclude="hist"))
+        all_files.sort()
+
+        print(f"\n{'='*60}")
+        print(f"Onia skim: {dataset}")
+        print(f"  {len(folders)} leaf dir(s), {len(all_files)} file(s) total")
+        result, metrics = _run_onia_skim(
+            paths=folders,
+            dataset=dataset,
+            parallel=parallel,
+            workers=workers,
+        )
+        _save_onia_skim_output(result, metrics, dataset)
 
 
 if __name__ == "__main__":
