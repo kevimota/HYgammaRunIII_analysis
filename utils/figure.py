@@ -7,6 +7,7 @@ import numpy as np
 import sys, os
 from copy import deepcopy
 from coffea.util import load
+import typer
 
 # Allow running as `python utils/figure.py` from the project root
 if __package__ is None:
@@ -456,205 +457,197 @@ def _save_combined_cutflow_plot(group_cutflow, mc_datasets, dirname, lumi, stage
     return fname
 
 
-if __name__ == "__main__":
-    import argparse
-
-    parser = argparse.ArgumentParser(description="Make plots from analysis output")
-    parser.add_argument(
-        "--workers", type=int, default=4, help="Number of worker threads (default: 4)"
-    )
-    parser.add_argument(
-        "--validation", action="store_true", help="create NTuple validation plots"
-    )
-    parser.add_argument(
-        "--save-per-dataset",
-        action="store_true",
-        help="Save per-dataset validation plots",
-    )
-    args = parser.parse_args()
-
+def main(
+    workers: int = typer.Option(4, "--workers", "-w", help="Number of worker processes"),
+    save_per_dataset: bool = typer.Option(
+        False, "--save-per-dataset", help="Save per-dataset validation plots"
+    ),
+):
     import os
 
     if not os.path.exists("hists"):
         os.mkdir("hists")
 
-    if args.validation:
-        # ---------------------------------------------------------------
-        # Load and sum all dataset groups (sequential)
-        # ---------------------------------------------------------------
-        print("Loading and summing histograms per dataset group...")
-        group_data = {}
-        for name, files in datasets.items():
-            ok = True
-            for f in files:
-                if not os.path.exists(f):
-                    print(f"  WARNING: {f} not found, skipping group '{name}'")
-                    ok = False
-                    break
-            if ok:
-                group_data[name] = sum_group(files)
-                print(f"  {name}: {len(files)} file(s) loaded")
+    # ---------------------------------------------------------------
+    # Load and sum all dataset groups (sequential)
+    # ---------------------------------------------------------------
+    print("Loading and summing histograms per dataset group...")
+    group_data = {}
+    for name, files in datasets.items():
+        ok = True
+        for f in files:
+            if not os.path.exists(f):
+                print(f"  WARNING: {f} not found, skipping group '{name}'")
+                ok = False
+                break
+        if ok:
+            group_data[name] = sum_group(files)
+            print(f"  {name}: {len(files)} file(s) loaded")
 
-        # Blind data x mass histograms in Z and H mass windows
-        if "Data" in group_data:
-            blind_hist(
-                group_data["Data"]["x"]["mass"],
-                windows=[(80, 100), (120, 130)],
-            )
-            print("  Blinded data x-mass in Z (80-100 GeV) and H (120-130 GeV) windows")
-        print()
+    # Blind data x mass histograms in Z and H mass windows
+    if "Data" in group_data:
+        blind_hist(
+            group_data["Data"]["x"]["mass"],
+            windows=[(80, 100), (120, 130)],
+        )
+        print("  Blinded data x-mass in Z (80-100 GeV) and H (120-130 GeV) windows")
+    print()
 
-        # ---------------------------------------------------------------
-        # Create output directories
-        # ---------------------------------------------------------------
-        combined_dir = "hists/combined"
-        comp_dir = "hists/comparison"
+    # ---------------------------------------------------------------
+    # Create output directories
+    # ---------------------------------------------------------------
+    combined_dir = "hists/combined"
+    comp_dir = "hists/comparison"
 
-        for cat in cats:
-            os.makedirs(f"{combined_dir}/{cat}", exist_ok=True)
+    for cat in cats:
+        os.makedirs(f"{combined_dir}/{cat}", exist_ok=True)
 
-        if args.save_per_dataset:
-            for name in group_data:
-                for cat in cats:
-                    os.makedirs(f"hists/{name}/{cat}", exist_ok=True)
-
+    if save_per_dataset:
         for name in group_data:
-            os.makedirs(f"{comp_dir}/{name}", exist_ok=True)
+            for cat in cats:
+                os.makedirs(f"hists/{name}/{cat}", exist_ok=True)
 
-        # ---------------------------------------------------------------
-        # Combined stacked plots: all MC groups stacked + data as errorbars
-        # ---------------------------------------------------------------
-        print("Saving stacked plots")
-        tasks = []
-        for grp, variables in hist_groups.items():
-            for var in variables:
-                for cat in cats:
-                    tasks.append(
-                        (
-                            _save_combined_plot,
-                            grp,
-                            var,
-                            cat,
-                            mc_datasets,
-                            combined_dir,
-                            lumi,
-                        )
+    for name in group_data:
+        os.makedirs(f"{comp_dir}/{name}", exist_ok=True)
+
+    # ---------------------------------------------------------------
+    # Combined stacked plots: all MC groups stacked + data as errorbars
+    # ---------------------------------------------------------------
+    print("Saving stacked plots")
+    tasks = []
+    for grp, variables in hist_groups.items():
+        for var in variables:
+            for cat in cats:
+                tasks.append(
+                    (
+                        _save_combined_plot,
+                        grp,
+                        var,
+                        cat,
+                        mc_datasets,
+                        combined_dir,
+                        lumi,
                     )
+                )
 
-        with ProcessPoolExecutor(
-            max_workers=args.workers, initializer=_init_worker, initargs=(group_data,)
-        ) as executor:
-            futures = [executor.submit(f, *a) for f, *a in tasks]
-            for future in as_completed(futures):
-                print(f"  Saved {future.result()}")
+    with ProcessPoolExecutor(
+        max_workers=workers, initializer=_init_worker, initargs=(group_data,)
+    ) as executor:
+        futures = [executor.submit(f, *a) for f, *a in tasks]
+        for future in as_completed(futures):
+            print(f"  Saved {future.result()}")
 
-        # ---------------------------------------------------------------
-        # Per-dataset plots for reference (parallel, optional)
-        # ---------------------------------------------------------------
-        if args.save_per_dataset:
-            tasks = []
-            for ds_name, ds_data in group_data.items():
-                ds_dir = f"hists/{ds_name}"
-                for grp, variables in hist_groups.items():
-                    for var in variables:
-                        for cat in cats:
-                            tasks.append(
-                                (
-                                    _save_per_dataset_plot,
-                                    ds_name,
-                                    ds_data,
-                                    grp,
-                                    var,
-                                    cat,
-                                    ds_dir,
-                                    lumi,
-                                )
-                            )
-
-            print(f"Saving per-dataset plots ({len(tasks)} total)")
-            with ProcessPoolExecutor(
-                max_workers=args.workers,
-                initializer=_init_worker,
-                initargs=(group_data,),
-            ) as executor:
-                futures = [executor.submit(f, *a) for f, *a in tasks]
-                for future in as_completed(futures):
-                    print(f"  Saved {future.result()}")
-
-        # ---------------------------------------------------------------
-        # Preselection vs full-selection comparison
-        # ---------------------------------------------------------------
-        print("Saving comparison plots")
+    # ---------------------------------------------------------------
+    # Per-dataset plots for reference (parallel, optional)
+    # ---------------------------------------------------------------
+    if save_per_dataset:
         tasks = []
         for ds_name, ds_data in group_data.items():
-            ds_comp_dir = f"{comp_dir}/{ds_name}"
+            ds_dir = f"hists/{ds_name}"
             for grp, variables in hist_groups.items():
                 for var in variables:
-                    tasks.append(
-                        (
-                            _save_comparison_plot,
-                            ds_name,
-                            ds_data,
-                            grp,
-                            var,
-                            ds_comp_dir,
-                            lumi,
+                    for cat in cats:
+                        tasks.append(
+                            (
+                                _save_per_dataset_plot,
+                                ds_name,
+                                ds_data,
+                                grp,
+                                var,
+                                cat,
+                                ds_dir,
+                                lumi,
+                            )
                         )
+
+        print(f"Saving per-dataset plots ({len(tasks)} total)")
+        with ProcessPoolExecutor(
+            max_workers=workers,
+            initializer=_init_worker,
+            initargs=(group_data,),
+        ) as executor:
+            futures = [executor.submit(f, *a) for f, *a in tasks]
+            for future in as_completed(futures):
+                print(f"  Saved {future.result()}")
+
+    # ---------------------------------------------------------------
+    # Preselection vs full-selection comparison
+    # ---------------------------------------------------------------
+    print("Saving comparison plots")
+    tasks = []
+    for ds_name, ds_data in group_data.items():
+        ds_comp_dir = f"{comp_dir}/{ds_name}"
+        for grp, variables in hist_groups.items():
+            for var in variables:
+                tasks.append(
+                    (
+                        _save_comparison_plot,
+                        ds_name,
+                        ds_data,
+                        grp,
+                        var,
+                        ds_comp_dir,
+                        lumi,
                     )
-
-        with ProcessPoolExecutor(
-            max_workers=args.workers, initializer=_init_worker, initargs=(group_data,)
-        ) as executor:
-            futures = [executor.submit(f, *a) for f, *a in tasks]
-            for future in as_completed(futures):
-                print(f"  Saved {future.result()}")
-
-        # ---------------------------------------------------------------
-        # Cutflow bar charts
-        # ---------------------------------------------------------------
-        cf_dir = "hists/cutflow"
-        os.makedirs(cf_dir, exist_ok=True)
-
-        # Load cutflows for all dataset groups (sequential)
-        print("Loading cutflows...")
-        group_cutflow = {}
-        for name, files in datasets.items():
-            ok = True
-            for f in files:
-                if not os.path.exists(f):
-                    ok = False
-                    break
-            if ok:
-                group_cutflow[name] = sum_cutflow(files)
-                print(f"  {name}: cutflow loaded")
-
-        # Per-dataset cutflow bar charts (parallel)
-        tasks = []
-        for ds_name, cf in group_cutflow.items():
-            tasks.append(
-                (
-                    _save_cutflow_plot,
-                    ds_name,
-                    cf,
-                    cf_dir,
-                    lumi,
-                    cutflow_stages,
                 )
+
+    with ProcessPoolExecutor(
+        max_workers=workers, initializer=_init_worker, initargs=(group_data,)
+    ) as executor:
+        futures = [executor.submit(f, *a) for f, *a in tasks]
+        for future in as_completed(futures):
+            print(f"  Saved {future.result()}")
+
+    # ---------------------------------------------------------------
+    # Cutflow bar charts
+    # ---------------------------------------------------------------
+    cf_dir = "hists/cutflow"
+    os.makedirs(cf_dir, exist_ok=True)
+
+    # Load cutflows for all dataset groups (sequential)
+    print("Loading cutflows...")
+    group_cutflow = {}
+    for name, files in datasets.items():
+        ok = True
+        for f in files:
+            if not os.path.exists(f):
+                ok = False
+                break
+        if ok:
+            group_cutflow[name] = sum_cutflow(files)
+            print(f"  {name}: cutflow loaded")
+
+    # Per-dataset cutflow bar charts (parallel)
+    tasks = []
+    for ds_name, cf in group_cutflow.items():
+        tasks.append(
+            (
+                _save_cutflow_plot,
+                ds_name,
+                cf,
+                cf_dir,
+                lumi,
+                cutflow_stages,
             )
-
-        with ProcessPoolExecutor(
-            max_workers=args.workers, initializer=_init_worker, initargs=(group_data,)
-        ) as executor:
-            futures = [executor.submit(f, *a) for f, *a in tasks]
-            for future in as_completed(futures):
-                print(f"  Saved {future.result()}")
-
-        # Combined cutflow: all MC lines + data (single plot)
-        fname = _save_combined_cutflow_plot(
-            group_cutflow,
-            mc_datasets,
-            cf_dir,
-            lumi,
-            cutflow_stages,
         )
-        print(f"  Saved {fname}")
+
+    with ProcessPoolExecutor(
+        max_workers=workers, initializer=_init_worker, initargs=(group_data,)
+    ) as executor:
+        futures = [executor.submit(f, *a) for f, *a in tasks]
+        for future in as_completed(futures):
+            print(f"  Saved {future.result()}")
+
+    # Combined cutflow: all MC lines + data (single plot)
+    fname = _save_combined_cutflow_plot(
+        group_cutflow,
+        mc_datasets,
+        cf_dir,
+        lumi,
+        cutflow_stages,
+    )
+    print(f"  Saved {fname}")
+
+
+if __name__ == "__main__":
+    typer.run(main)

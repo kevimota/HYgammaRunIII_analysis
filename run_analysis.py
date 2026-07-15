@@ -2,9 +2,8 @@
 
 Usage
 -----
-    python -m run_analysis path_1 [path_1 ...]
-    python -m run_analysis --parallel path_1 ...
-    python run_analysis.py path_1 ...   (repo root must be on PYTHONPATH)
+    python run_analysis.py compare path_1 [path_1 ...] --dataset NAME [--is-mc]
+    python run_analysis.py compare --parallel path_1 ... --workers 8
 
 Output
 -----
@@ -12,105 +11,56 @@ Output
 """
 
 from pprint import pprint
-import argparse
 import os
 
+import typer
 from coffea.processor import IterativeExecutor, FuturesExecutor, Runner
 from coffea.util import save
 from schema import OniaNanoSchema
 from processor import McDataCompProcessor
 from utils import get_files
 import uproot
-
 import awkward as ak
 import numpy as np
 
+app = typer.Typer()
 OniaNanoSchema.warn_missing_crossrefs = False
 
 
-def main():
-    parser = argparse.ArgumentParser(
-        description="Run McDataCompProcessor over NanoAOD-like ROOT files."
-    )
-    parser.add_argument(
-        "paths",
-        nargs="+",
-        help="Input ROOT files (or file patterns supported by uproot).",
-    )
-    parser.add_argument("--dataset", type=str, help="dataset name")
-    parser.add_argument(
-        "--parallel",
-        action="store_true",
-        help="Use FuturesExecutor for parallel processing (default: IterativeExecutor).",
-    )
-    parser.add_argument(
-        "--workers",
-        type=int,
-        default=4,
-        help="Number of workers for Futures Executor (default: 4)",
-    )
-    parser.add_argument(
-        "--chunksize",
-        type=int,
-        default=100_000,
-        help="Maximum entries per chunk (default: 100_000).",
-    )
-    parser.add_argument(
-        "--maxchunks",
-        type=int,
-        default=None,
-        help="Maximum number of chunks to process per dataset (default: all).",
-    )
-    parser.add_argument(
-        "--treename",
-        default="Events",
-        help="TTree name in the ROOT file (default: Events).",
-    )
-    parser.add_argument("--is_mc", action="store_true", help="Dataset is MC")
-    args = parser.parse_args()
-
-    # -----------------------------------------------------------------
-    # Build fileset: dict of dataset -> [file list]
-    # Here we treat all input files as belonging to a single dataset.
-    # -----------------------------------------------------------------
+def _run_compare(
+    paths: list[str],
+    dataset: str,
+    parallel: bool = False,
+    workers: int = 4,
+    chunksize: int = 100_000,
+    maxchunks: int | None = None,
+    treename: str = "Events",
+    is_mc: bool = False,
+) -> tuple[dict, dict]:
     fileset = {
-        args.dataset: {
-            "files": get_files(args.paths, exclude="hist"),
-            "treename": args.treename,
-            "metadata": {"is_mc": args.is_mc},
+        dataset: {
+            "files": get_files(paths, exclude="hist"),
+            "treename": treename,
+            "metadata": {"is_mc": is_mc},
         }
     }
 
-    # -----------------------------------------------------------------
-    # Executor selection
-    #
-    # IterativeExecutor (default): sequential, single-threaded.
-    #   Good for debugging; use for quick local tests.
-    #
-    # FuturesExecutor: parallel via Python's concurrent.futures.
-    #   Use when you have multiple cores and files.
-    #   To switch: executor = FuturesExecutor(compression=1)
-    # -----------------------------------------------------------------
-    if args.parallel:
-        executor = FuturesExecutor(workers=args.workers)
+    if parallel:
+        executor = FuturesExecutor(workers=workers)
     else:
         executor = IterativeExecutor()
 
-    # -----------------------------------------------------------------
-    # Runner: orchestrates chunking, schema application, and accumulation.
-    # -----------------------------------------------------------------
     runner = Runner(
         executor=executor,
-        chunksize=args.chunksize,
-        maxchunks=args.maxchunks,
+        chunksize=chunksize,
+        maxchunks=maxchunks,
         schema=OniaNanoSchema,
         format="root",
         savemetrics=True,
     )
 
-    print(
-        f"\nProcessing {len(fileset[args.dataset]["files"])} file(s) with chunksize={args.chunksize}"
-    )
+    n_files = len(fileset[dataset]["files"])
+    print(f"\nProcessing {n_files} file(s) with chunksize={chunksize}")
     print(f"Executor: {executor.__class__.__name__}")
 
     result, metrics = runner(
@@ -118,12 +68,13 @@ def main():
         processor_instance=McDataCompProcessor(),
     )
 
+    return result, metrics
+
+
+def _save_output(result: dict, metrics: dict, dataset: str, is_mc: bool):
     print("\n--- Metrics ---")
     pprint(metrics)
 
-    # -----------------------------------------------------------------
-    # Print cutflow summary
-    # -----------------------------------------------------------------
     cutflow = result["cutflow"]
     n_events = cutflow.get("n_events", 0)
     trigger_sel = cutflow.get("trigger_sel", 0)
@@ -135,47 +86,60 @@ def main():
     print("\n--- Cutflow ---")
     print(f"  Total events:         {n_events:,}")
     print(f"  Trigger selection:    {trigger_sel:,}  ({100*trigger_sel/n_events:.1f}%)")
-    print(
-        f"  Muons (good):         {good_muons_sel:,}  ({100*good_muons_sel/n_events:.1f}%)"
-    )
-    print(
-        f"  Photon (good):        {good_photon_sel:,}  ({100*good_photon_sel/n_events:.1f}%)"
-    )
+    print(f"  Muons (good):         {good_muons_sel:,}  ({100*good_muons_sel/n_events:.1f}%)")
+    print(f"  Photon (good):        {good_photon_sel:,}  ({100*good_photon_sel/n_events:.1f}%)")
     print(f"  Upsilon mass:         {upsilon_sel:,}  ({100*upsilon_sel/n_events:.1f}%)")
     print(f"  X mass:               {x_sel:,}  ({100*x_sel/n_events:.1f}%)")
 
-    # -----------------------------------------------------------------
-    # Saving files
-    # -----------------------------------------------------------------
-
     out_dir = "output/mc_data_comp"
-    if not os.path.exists(out_dir):
-        os.makedirs(out_dir)
-    result = {**result, "is_mc": args.is_mc, "dataset": args.dataset}
-    save(result, f"{out_dir}/{args.dataset}.pkl")
+    os.makedirs(out_dir, exist_ok=True)
+    result = {**result, "is_mc": is_mc, "dataset": dataset}
+    save(result, f"{out_dir}/{dataset}.pkl")
 
     from coffea.processor import column_accumulator
 
     events = {}
-
     for k in result:
         if not isinstance(result[k], column_accumulator):
             continue
         events[k] = ak.Array(result[k].value)
-
     events = ak.zip(events)
 
-    with uproot.recreate(f"{out_dir}/{args.dataset}.root") as f:
+    with uproot.recreate(f"{out_dir}/{dataset}.root") as f:
         f["events"] = events
-        f["metadata"] = ak.Array([{"is_mc": args.is_mc, "dataset": args.dataset}])
+        f["metadata"] = ak.Array([{"is_mc": is_mc, "dataset": dataset}])
         for grp in result["hists"]:
             for var in result["hists"][grp]:
                 for cat in result["hists"][grp][var].axes["cat"]:
                     path = f"{grp}/{var}/{cat}"
                     f[path] = result["hists"][grp][var][:, cat]
 
-    print(f"\nOutput saved to {out_dir}/{args.dataset}.pkl and {out_dir}/{args.dataset}.root")
+    print(f"\nOutput saved to {out_dir}/{dataset}.pkl and {out_dir}/{dataset}.root")
+
+
+@app.command()
+def compare(
+    paths: list[str] = typer.Argument(..., help="Input ROOT files or directories"),
+    dataset: str = typer.Option(..., "--dataset", "-d", help="dataset name"),
+    parallel: bool = typer.Option(False, "--parallel", "-p", help="use parallel executor"),
+    workers: int = typer.Option(4, "--workers", "-w", help="number of workers"),
+    chunksize: int = typer.Option(100_000, "--chunksize", help="entries per chunk"),
+    maxchunks: int | None = typer.Option(None, "--maxchunks", help="max chunks to process"),
+    treename: str = typer.Option("Events", "--treename", help="TTree name"),
+    is_mc: bool = typer.Option(False, "--is-mc", help="dataset is MC"),
+):
+    result, metrics = _run_compare(
+        paths=paths,
+        dataset=dataset,
+        parallel=parallel,
+        workers=workers,
+        chunksize=chunksize,
+        maxchunks=maxchunks,
+        treename=treename,
+        is_mc=is_mc,
+    )
+    _save_output(result, metrics, dataset, is_mc)
 
 
 if __name__ == "__main__":
-    main()
+    app()
